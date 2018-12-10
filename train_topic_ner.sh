@@ -18,4 +18,4 @@ python run_ner.py \
   --learning_rate=2e-5 \
   --num_train_epochs=10.0 \
   --droupout_rate=0.9 \
-  --output_dir=/data1/xuejiao/data/bert/result/topic_ner_output/
+  --output_dir=$NER_DIR/result/topic_ner_output/

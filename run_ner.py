@@ -14,7 +14,7 @@ from bert import tokenization
 
 __author__ = 'xuejiao'
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '7'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 flags = tf.flags
 
@@ -425,7 +425,7 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
                 scaffold_fn=scaffold_fn)
 
         elif mode == tf.estimator.ModeKeys.EVAL:
-            def metric_fn(loss, label_ids, predict_labels):
+            def metric_fn(label_ids, predict_labels):
                 accuracy = tf.metrics.accuracy(label_ids, predict_labels)
                 precision = tf.metrics.precision(label_ids, predict_labels)
                 recall = tf.metrics.recall(label_ids, predict_labels)
@@ -433,10 +433,9 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
                     "eval_accuracy": accuracy,
                     "eval_precision": precision,
                     "eval_recall": recall,
-                    "eval_loss": loss,
                 }
 
-            eval_metrics = (metric_fn, [total_loss, label_ids, pred_ids])
+            eval_metrics = (metric_fn, [label_ids, pred_ids])
             output_spec = tf.contrib.tpu.TPUEstimatorSpec(
                 mode=mode,
                 loss=total_loss,
