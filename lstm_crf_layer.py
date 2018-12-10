@@ -42,7 +42,7 @@ class BLSTM_CRF(object):
     def add_blstm_crf_layer(self, crf_only):
         """
         blstm-crf网络
-        :return: 
+        :return:
         """
         if self.is_training:
             # lstm input dropout rate i set 0.9 will get best score
@@ -64,7 +64,7 @@ class BLSTM_CRF(object):
     def _witch_cell(self):
         """
         RNN 类型
-        :return: 
+        :return:
         """
         cell_tmp = None
         if self.cell_type == 'lstm':
@@ -89,8 +89,8 @@ class BLSTM_CRF(object):
         return cell_fw, cell_bw
     def blstm_layer(self, embedding_chars):
         """
-                
-        :return: 
+
+        :return:
         """
         with tf.variable_scope('rnn_layer'):
             cell_fw, cell_bw = self._bi_dir_rnn()
@@ -106,7 +106,7 @@ class BLSTM_CRF(object):
     def project_bilstm_layer(self, lstm_outputs, name=None):
         """
         hidden layer between lstm layer and logits
-        :param lstm_outputs: [batch_size, num_steps, emb_size] 
+        :param lstm_outputs: [batch_size, num_steps, emb_size]
         :return: [batch_size, num_steps, num_tags]
         """
         with tf.variable_scope("project" if not name else name):
@@ -133,7 +133,7 @@ class BLSTM_CRF(object):
     def project_crf_layer(self, embedding_chars, name=None):
         """
         hidden layer between input layer and logits
-        :param lstm_outputs: [batch_size, num_steps, emb_size] 
+        :param lstm_outputs: [batch_size, num_steps, emb_size]
         :return: [batch_size, num_steps, num_tags]
         """
         with tf.variable_scope("project" if not name else name):
