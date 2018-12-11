@@ -1,9 +1,11 @@
 # !/usr/bin/python
 # -*- coding: utf-8 -*-
+import codecs
 import collections
 import json
 import os
 
+import numpy as np
 import tensorflow as tf
 from tensorflow.contrib.layers.python.layers import initializers
 
@@ -44,6 +46,12 @@ flags.DEFINE_string('cell', 'lstm', 'which rnn cell used')
 flags.DEFINE_float('droupout_rate', 0.5, 'Dropout rate')
 flags.DEFINE_float('clip', 5, 'Gradient clip')
 
+flags.DEFINE_bool('with_bert', True, "Whether using pre-trained bert")
+
+flags.DEFINE_string("extra_embedding_file", None,
+                    "Extra embedding word2vec file when training without bert")
+flags.DEFINE_integer("extra_embedding_dim", 256, "Embedding dim for extra embedding file")
+
 ## Other parameters
 flags.DEFINE_string("train_file", None, "")
 
@@ -61,7 +69,7 @@ flags.DEFINE_bool(
     "models and False for cased models.")
 
 flags.DEFINE_integer(
-    "max_seq_length", 384,
+    "max_seq_length", 128,
     "The maximum total input sequence length after WordPiece tokenization. "
     "Sequences longer than this will be truncated, and sequences shorter "
     "than this will be padded.")
@@ -324,20 +332,29 @@ def input_fn_builder(input_file, seq_length, is_training, drop_remainder):
     return input_fn
 
 
-def create_model(bert_config, is_training, input_ids, input_mask, segment_ids,
-                 labels, num_labels, sequence_lengths, use_one_hot_embeddings):
-    """Creates a classification model."""
-    model = modeling.BertModel(
-        config=bert_config,
-        is_training=is_training,
-        input_ids=input_ids,
-        input_mask=input_mask,
-        token_type_ids=segment_ids,
-        use_one_hot_embeddings=use_one_hot_embeddings)
+def create_model(bert_config, with_bert, extra_embedding, is_training, input_ids, input_mask,
+                 segment_ids, labels, num_labels, sequence_lengths, use_one_hot_embeddings):
+    if with_bert:
+        model = modeling.BertModel(
+            config=bert_config,
+            is_training=is_training,
+            input_ids=input_ids,
+            input_mask=input_mask,
+            token_type_ids=segment_ids,
+            use_one_hot_embeddings=use_one_hot_embeddings)
 
-    # 获取对应的embedding 输入数据[batch_size, seq_length, embedding_size]
-    embedding = model.get_sequence_output()
-    max_seq_length = embedding.shape[1].value
+        # 获取对应的embedding 输入数据[batch_size, seq_length, embedding_size]
+        embedding = model.get_sequence_output()
+        max_seq_length = embedding.shape[1].value
+
+    else:
+        max_seq_length = FLAGS.max_seq_length
+        extra_lookup = tf.get_variable(
+            name="extra_lookup",
+            shape=[extra_embedding.shape[0], extra_embedding.shape[1]])
+        extra_lookup.assign(extra_embedding, True)
+
+        embedding = tf.nn.embedding_lookup(extra_lookup, input_ids)
 
     blstm_crf = lstm_crf_layer.BLSTM_CRF(embedded_chars=embedding,
                                          hidden_unit=FLAGS.lstm_size,
@@ -355,8 +372,8 @@ def create_model(bert_config, is_training, input_ids, input_mask, segment_ids,
     return rst
 
 
-def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
-                     num_train_steps, num_warmup_steps, use_tpu,
+def model_fn_builder(bert_config, with_bert, extra_embedding, num_labels, init_checkpoint,
+                     learning_rate, num_train_steps, num_warmup_steps, use_tpu,
                      use_one_hot_embeddings):
     """Returns `model_fn` closure for TPUEstimator."""
 
@@ -379,6 +396,8 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
 
         (logits, trans, total_loss, pred_ids) = create_model(
             bert_config=bert_config,
+            with_bert=with_bert,
+            extra_embedding=extra_embedding,
             is_training=is_training,
             input_ids=input_ids,
             input_mask=input_mask,
@@ -454,6 +473,25 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
     return model_fn
 
 
+def load_embedding(path, word_dim, char_to_id):
+    data = np.random.uniform(-1, 1, [len(char_to_id), word_dim])
+    count = 0
+    try:
+        for i, line in enumerate(codecs.open(path, 'r', 'utf-8')):
+            line = line.rstrip().split()
+            if len(line) == word_dim + 1:
+                if line[0] in char_to_id:
+                    count += 1
+                    id = char_to_id[line[0]]
+                    data[id] = np.array([float(x) for x in line[1:]]).astype(np.float32)
+                else:
+                    pass
+    except Exception as ex:
+        tf.logging.error("load_embedding error", ex)
+    tf.logging.info("load %d extra embedding", count)
+    return data
+
+
 def main(_):
     tf.logging.set_verbosity(tf.logging.INFO)
 
@@ -473,6 +511,11 @@ def main(_):
 
     text_tokenizer = tokenization.FullTokenizer(
         vocab_file=FLAGS.vocab_file, do_lower_case=FLAGS.do_lower_case)
+
+    extra_embedding = None
+    if FLAGS.extra_embedding_file:
+        extra_embedding = load_embedding(
+            FLAGS.extra_embedding_file, FLAGS.extra_embedding_dim, text_tokenizer.vocab)
 
     label_tokenizer = tokenization.FullTokenizer(
         vocab_file=FLAGS.label_vocab_file, do_lower_case=FLAGS.do_lower_case)
@@ -510,13 +553,16 @@ def main(_):
 
     model_fn = model_fn_builder(
         bert_config=bert_config,
+        with_bert=FLAGS.with_bert,
+        extra_embedding=extra_embedding,
         num_labels=len(label_tokenizer.vocab),
         init_checkpoint=FLAGS.init_checkpoint,
         learning_rate=FLAGS.learning_rate,
         num_train_steps=num_train_steps,
         num_warmup_steps=num_warmup_steps,
         use_tpu=FLAGS.use_tpu,
-        use_one_hot_embeddings=FLAGS.use_tpu)
+        use_one_hot_embeddings=FLAGS.use_tpu
+    )
 
     # If TPU is not available, this will fall back to normal Estimator on CPU
     # or GPU.
@@ -596,7 +642,7 @@ def main(_):
     if FLAGS.do_predict:
         example_count = parse_file_len(FLAGS.predict_file)
         eval_writer = FeatureWriter(
-            filename=os.path.join(FLAGS.output_dir, "eval.tf_record"),
+            filename=os.path.join(FLAGS.output_dir, "pred.tf_record"),
             is_training=False)
         eval_features = []
 
