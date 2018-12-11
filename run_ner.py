@@ -212,6 +212,8 @@ def read_ner_features(file_name, text_tokenizer, label_tokenizer, max_seq_length
 
             tokens.append("[CLS]")
             segment_ids.append(0)
+            labels.append("O")
+            label_ids.append(0)
 
             for t in cur_data["chars"][0: max_seq_length - 1]:
                 tokens.append(t)
@@ -222,7 +224,7 @@ def read_ner_features(file_name, text_tokenizer, label_tokenizer, max_seq_length
 
             if is_training:
                 # no label for CLS
-                for l in cur_data["labels"][0: max_seq_length]:
+                for l in cur_data["labels"][0: max_seq_length - 1]:
                     labels.append(l)
                 while len(labels) < max_seq_length:
                     labels.append("O")
@@ -593,14 +595,14 @@ def main(_):
             seq_length=FLAGS.max_seq_length,
             is_training=True,
             drop_remainder=True)
-        # result = estimator.evaluate(input_fn=eval_input_fn, steps=eval_steps)
-        #
-        # output_eval_file = os.path.join(FLAGS.output_dir, "eval_results.txt")
-        # with tf.gfile.GFile(output_eval_file, "w") as writer:
-        #     tf.logging.info("***** Eval results *****")
-        #     for key in sorted(result.keys()):
-        #         tf.logging.info("  %s = %s", key, str(result[key]))
-        #         writer.write("%s = %s\n" % (key, str(result[key])))
+        result = estimator.evaluate(input_fn=eval_input_fn, steps=eval_steps)
+
+        output_eval_file = os.path.join(FLAGS.output_dir, "eval_results.txt")
+        with tf.gfile.GFile(output_eval_file, "w") as writer:
+            tf.logging.info("***** Eval results *****")
+            for key in sorted(result.keys()):
+                tf.logging.info("  %s = %s", key, str(result[key]))
+                writer.write("%s = %s\n" % (key, str(result[key])))
 
         def build_result(input_ids, label_ids, predict_ids, lengths):
             predict_results = []
@@ -632,6 +634,8 @@ def main(_):
                     result["lengths"])
                 for line in predict_block:
                     writer.write(line + "\n")
+                    if count == 1:
+                        tf.logging.info(line + "\n")
                 writer.write("\n")
 
         from conlleval import return_report
