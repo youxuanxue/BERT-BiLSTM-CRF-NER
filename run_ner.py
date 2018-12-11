@@ -189,46 +189,6 @@ class FeatureWriter(object):
         self._writer.close()
 
 
-RawResult = collections.namedtuple("RawResult",
-                                   ["input_ids", "predict_ids"])
-
-
-def write_predictions(inv_vocab, all_results, output_prediction_file):
-    tf.logging.info("Writing predictions to: %s" % (output_prediction_file))
-
-    def build_result(result):
-        task_result = []
-        cur_token = []
-        chars = [inv_vocab[x] for x in result.input_ids]
-        preds = [inv_vocab[x] for x in result.predict_ids]
-        for char, pred in zip(chars, preds):
-            if pred in ["S", "O", "<UNK>", "E"]:
-                cur_token.append(char)
-                task_result.append("".join(cur_token))
-                cur_token = []
-            else:
-                pieces = pred.split('-')
-                if len(pieces) == 2:
-                    if pieces[0] in ["S", "O", "<UNK>", "E"]:
-                        cur_token.append(char + "/" + pieces[1])
-                        task_result.append("".join(cur_token))
-                        cur_token = []
-                    else:
-                        cur_token.append(char)
-                else:
-                    cur_token.append(char)
-        if cur_token:
-            task_result.append("".join(cur_token))
-        return "".join(task_result)
-
-    final_results = []
-    for result in all_results:
-        final_results.append(build_result(result))
-
-    with tf.gfile.GFile(output_prediction_file, "w") as writer:
-        writer.write(json.dumps(final_results, indent=4) + "\n")
-
-
 def parse_file_len(fname):
     i = -1
     with open(fname) as f:
@@ -348,6 +308,7 @@ def create_model(bert_config, with_bert, extra_embedding, is_training, input_ids
         max_seq_length = embedding.shape[1].value
 
     else:
+        tf.logging.info("")
         max_seq_length = FLAGS.max_seq_length
         extra_lookup = tf.get_variable(
             name="extra_lookup",
@@ -464,7 +425,9 @@ def model_fn_builder(bert_config, with_bert, extra_embedding, num_labels, init_c
         else:
             predictions = {
                 "input_ids": input_ids,
+                "label_ids": label_ids,
                 "predict_ids": pred_ids,
+                "lengths": sequence_lengths,
             }
             output_spec = tf.contrib.tpu.TPUEstimatorSpec(
                 mode=mode, predictions=predictions, scaffold_fn=scaffold_fn)
@@ -488,7 +451,7 @@ def load_embedding(path, word_dim, char_to_id):
                     pass
     except Exception as ex:
         tf.logging.error("load_embedding error", ex)
-    tf.logging.info("load %d extra embedding", count)
+    tf.logging.info("load %d extra embedding for total chars: %d", count, len(char_to_id))
     return data
 
 
@@ -630,14 +593,53 @@ def main(_):
             seq_length=FLAGS.max_seq_length,
             is_training=True,
             drop_remainder=True)
-        result = estimator.evaluate(input_fn=eval_input_fn, steps=eval_steps)
+        # result = estimator.evaluate(input_fn=eval_input_fn, steps=eval_steps)
+        #
+        # output_eval_file = os.path.join(FLAGS.output_dir, "eval_results.txt")
+        # with tf.gfile.GFile(output_eval_file, "w") as writer:
+        #     tf.logging.info("***** Eval results *****")
+        #     for key in sorted(result.keys()):
+        #         tf.logging.info("  %s = %s", key, str(result[key]))
+        #         writer.write("%s = %s\n" % (key, str(result[key])))
 
-        output_eval_file = os.path.join(FLAGS.output_dir, "eval_results.txt")
-        with tf.gfile.GFile(output_eval_file, "w") as writer:
-            tf.logging.info("***** Eval results *****")
-            for key in sorted(result.keys()):
-                tf.logging.info("  %s = %s", key, str(result[key]))
-                writer.write("%s = %s\n" % (key, str(result[key])))
+        def build_result(input_ids, label_ids, predict_ids, lengths):
+            predict_results = []
+            chars = [text_tokenizer.inv_vocab[x] for x in input_ids[:lengths]]
+            golds = [label_tokenizer.inv_vocab[x] for x in label_ids[:lengths]]
+            preds = [label_tokenizer.inv_vocab[x] for x in predict_ids[:lengths]]
+            for char, gold, pred in zip(chars, golds, preds):
+                if type(char) is bytes:
+                    char = char.decode()
+                predict_results.append(" ".join([char, gold, pred]))
+
+            return predict_results
+
+        # If running eval on the TPU, you will need to specify the number of
+        # steps.
+        detail_out_file = os.path.join(FLAGS.output_dir, "eval_result_detail.txt")
+        tf.logging.info("Writing eval detail to: %s" % (detail_out_file))
+
+        with tf.gfile.GFile(detail_out_file, "w") as writer:
+            count = 0
+            for result in estimator.predict(eval_input_fn, yield_single_examples=True):
+                count += 1
+                if count % 1000 == 0:
+                    tf.logging.info("Processing example: %d" % count)
+                predict_block = build_result(
+                    result["input_ids"],
+                    result["label_ids"],
+                    result["predict_ids"],
+                    result["lengths"])
+                for line in predict_block:
+                    writer.write(line + "\n")
+                writer.write("\n")
+
+        from conlleval import return_report
+        eval_report = return_report(detail_out_file)
+        report_out_file = os.path.join(FLAGS.output_dir, "eval_result_report.txt")
+        with tf.gfile.GFile(report_out_file, "w") as writer:
+            writer.write(eval_report + "\n")
+            print(eval_report)
 
     if FLAGS.do_predict:
         example_count = parse_file_len(FLAGS.predict_file)
@@ -664,28 +666,50 @@ def main(_):
         tf.logging.info("  Num split examples = %d", len(eval_features))
         tf.logging.info("  Batch size = %d", FLAGS.predict_batch_size)
 
-        all_results = []
         predict_input_fn = input_fn_builder(
             input_file=eval_writer.filename,
             seq_length=FLAGS.max_seq_length,
             is_training=False,
             drop_remainder=False)
 
+        def build_result(input_ids, predict_ids, lengths):
+            task_result = []
+            cur_token = []
+            chars = [text_tokenizer.inv_vocab[x] for x in input_ids[:lengths]]
+            preds = [label_tokenizer.inv_vocab[x] for x in predict_ids[:lengths]]
+            for char, pred in zip(chars, preds):
+                if pred in ["O"]:
+                    cur_token.append(char)
+                    task_result.append("".join(cur_token))
+                    cur_token = []
+                else:
+                    pieces = pred.split('-')
+                    if len(pieces) == 2:
+                        if pieces[0] in ["E"]:
+                            cur_token.append(char + "/" + pieces[1])
+                            task_result.append("".join(cur_token))
+                            cur_token = []
+                        else:
+                            cur_token.append(char)
+                    else:
+                        cur_token.append(char)
+            if cur_token:
+                task_result.append("".join(cur_token))
+            return "".join(task_result)
+
         # If running eval on the TPU, you will need to specify the number of
         # steps.
-        for result in estimator.predict(
-                predict_input_fn, yield_single_examples=True):
-            if len(all_results) % 1000 == 0:
-                tf.logging.info("Processing example: %d" % (len(all_results)))
-            input_ids = [float(x) for x in result["input_ids"].flat]
-            predict_ids = [float(x) for x in result["predict_ids"].flat]
-            all_results.append(RawResult(
-                input_ids=input_ids,
-                predict_ids=predict_ids))
+        detail_out_file = os.path.join(FLAGS.output_dir, "predictions.txt")
+        tf.logging.info("Writing predictions to: %s" % (detail_out_file))
 
-        output_prediction_file = os.path.join(FLAGS.output_dir, "predictions.json")
-
-        write_predictions(text_tokenizer.inv_vocab, all_results, output_prediction_file)
+        with tf.gfile.GFile(detail_out_file, "w") as writer:
+            count = 0
+            for result in estimator.predict(predict_input_fn, yield_single_examples=True):
+                count += 1
+                if count % 1000 == 0:
+                    tf.logging.info("Processing example: %d" % count)
+                info = build_result(result["input_ids"], result["predict_ids"], result["lengths"])
+                writer.write("%s\n" % info)
 
 
 if __name__ == "__main__":
