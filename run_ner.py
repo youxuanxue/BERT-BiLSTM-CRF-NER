@@ -246,7 +246,7 @@ def read_ner_features(file_name, text_tokenizer, label_tokenizer, max_seq_length
             output_fn(feature)
 
 
-def input_fn_builder(input_file, seq_length, is_training, drop_remainder):
+def input_fn_builder(input_file, seq_length, repeat, is_training, drop_remainder):
     """Creates an `input_fn` closure to be passed to TPUEstimator."""
 
     name_to_features = {
@@ -279,7 +279,7 @@ def input_fn_builder(input_file, seq_length, is_training, drop_remainder):
         # For training, we want a lot of parallel reading and shuffling.
         # For eval, we want no shuffling and parallel reading doesn't matter.
         d = tf.data.TFRecordDataset(input_file)
-        if is_training:
+        if repeat:
             d = d.repeat()
             d = d.shuffle(buffer_size=100)
 
@@ -563,6 +563,7 @@ def main(_):
         train_input_fn = input_fn_builder(
             input_file=train_writer.filename,
             seq_length=FLAGS.max_seq_length,
+            repeat=True,
             is_training=True,
             drop_remainder=True)
         estimator.train(input_fn=train_input_fn, max_steps=num_train_steps)
@@ -590,9 +591,11 @@ def main(_):
         tf.logging.info("  Batch size = %d", FLAGS.eval_batch_size)
         tf.logging.info("  Num steps = %d", eval_steps)
 
+        # eval
         eval_input_fn = input_fn_builder(
             input_file=eval_writer.filename,
             seq_length=FLAGS.max_seq_length,
+            repeat=False,
             is_training=True,
             drop_remainder=True)
         result = estimator.evaluate(input_fn=eval_input_fn, steps=eval_steps)
@@ -603,6 +606,14 @@ def main(_):
             for key in sorted(result.keys()):
                 tf.logging.info("  %s = %s", key, str(result[key]))
                 writer.write("%s = %s\n" % (key, str(result[key])))
+
+        # eval report
+        report_input_fn = input_fn_builder(
+            input_file=eval_writer.filename,
+            seq_length=FLAGS.max_seq_length,
+            repeat=False,
+            is_training=True,
+            drop_remainder=True)
 
         def build_result(input_ids, label_ids, predict_ids, lengths):
             predict_results = []
@@ -623,7 +634,7 @@ def main(_):
 
         with tf.gfile.GFile(detail_out_file, "w") as writer:
             count = 0
-            for result in estimator.predict(eval_input_fn, yield_single_examples=True):
+            for result in estimator.predict(report_input_fn, yield_single_examples=True):
                 count += 1
                 if count % 1000 == 0:
                     tf.logging.info("Processing example: %d" % count)
@@ -634,16 +645,15 @@ def main(_):
                     result["lengths"])
                 for line in predict_block:
                     writer.write(line + "\n")
-                    if count == 1:
-                        tf.logging.info(line + "\n")
                 writer.write("\n")
 
         from conlleval import return_report
         eval_report = return_report(detail_out_file)
         report_out_file = os.path.join(FLAGS.output_dir, "eval_result_report.txt")
         with tf.gfile.GFile(report_out_file, "w") as writer:
-            writer.write(eval_report + "\n")
-            print(eval_report)
+            for line in eval_report:
+                writer.write(line + "\n")
+                tf.logging.info(line)
 
     if FLAGS.do_predict:
         example_count = parse_file_len(FLAGS.predict_file)
@@ -673,6 +683,7 @@ def main(_):
         predict_input_fn = input_fn_builder(
             input_file=eval_writer.filename,
             seq_length=FLAGS.max_seq_length,
+            repeat=False,
             is_training=False,
             drop_remainder=False)
 
