@@ -16,7 +16,7 @@ from bert import tokenization
 
 __author__ = 'xuejiao'
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+os.environ['CUDA_VISIBLE_DEVICES'] = '2'
 
 flags = tf.flags
 
@@ -355,10 +355,10 @@ def model_fn_builder(bert_config, with_bert, extra_embedding, num_labels, init_c
         input_mask = features["input_mask"]
         segment_ids = features["segment_ids"]
 
-        if is_prediction:
-            label_ids = None
-        else:
+        if "label_ids" in features.keys():
             label_ids = features["label_ids"]
+        else:
+            label_ids = None
 
         used = tf.sign(tf.abs(input_ids))
         length = tf.reduce_sum(used, reduction_indices=1)
@@ -433,7 +433,7 @@ def model_fn_builder(bert_config, with_bert, extra_embedding, num_labels, init_c
                 scaffold_fn=scaffold_fn)
 
         else:
-            if label_ids:
+            if label_ids is not None:
                 predictions = {
                     "input_ids": input_ids,
                     "label_ids": label_ids,
@@ -615,7 +615,7 @@ def main(_):
             drop_remainder=True)
         result = estimator.evaluate(input_fn=eval_input_fn, steps=eval_steps)
 
-        output_eval_file = os.path.join(FLAGS.output_dir, "eval_results.txt")
+        output_eval_file = os.path.join(FLAGS.output_dir, "metrics_eval.txt")
         with tf.gfile.GFile(output_eval_file, "w") as writer:
             tf.logging.info("***** Eval results *****")
             for key in sorted(result.keys()):
@@ -644,7 +644,7 @@ def main(_):
 
         # If running eval on the TPU, you will need to specify the number of
         # steps.
-        detail_out_file = os.path.join(FLAGS.output_dir, "eval_result_detail.txt")
+        detail_out_file = os.path.join(FLAGS.output_dir, "detail_eval.txt")
         tf.logging.info("Writing eval detail to: %s" % (detail_out_file))
 
         with tf.gfile.GFile(detail_out_file, "w") as writer:
@@ -662,12 +662,14 @@ def main(_):
                     writer.write(line + "\n")
                 writer.write("\n")
 
-        from conlleval import return_report
-        eval_report = return_report(detail_out_file)
-        report_out_file = os.path.join(FLAGS.output_dir, "eval_result_report.txt")
+        from conlleval import record_cases
+        cases_out_path = os.path.join(FLAGS.output_dir, "cases")
+        tf.gfile.MakeDirs(cases_out_path)
+        eval_report = record_cases(detail_out_file, cases_out_path)
+        report_out_file = os.path.join(FLAGS.output_dir, "report_eval.txt")
         with tf.gfile.GFile(report_out_file, "w") as writer:
             for line in eval_report:
-                writer.write(line + "\n")
+                writer.write(line)
                 tf.logging.info(line)
 
     if FLAGS.do_predict:

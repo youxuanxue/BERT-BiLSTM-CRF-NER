@@ -1,3 +1,4 @@
+# coding=utf-8
 # Python version of the evaluation script from CoNLL'00-
 # Originates from: https://github.com/spyysalo/conlleval.py
 
@@ -22,16 +23,17 @@ ANY_SPACE = '<SPACE>'
 class FormatError(Exception):
     pass
 
+
 Metrics = namedtuple('Metrics', 'tp fp fn prec rec fscore')
 
 
 class EvalCounts(object):
     def __init__(self):
-        self.correct_chunk = 0    # number of correctly identified chunks
-        self.correct_tags = 0     # number of correct chunk tags
-        self.found_correct = 0    # number of chunks in corpus
-        self.found_guessed = 0    # number of identified chunks
-        self.token_counter = 0    # token counter (ignores sentence breaks)
+        self.correct_chunk = 0  # number of correctly identified chunks
+        self.correct_tags = 0  # number of correct chunk tags
+        self.found_correct = 0  # number of chunks in corpus
+        self.found_guessed = 0  # number of identified chunks
+        self.token_counter = 0  # token counter (ignores sentence breaks)
 
         # counts by type
         self.t_correct_chunk = defaultdict(int)
@@ -63,15 +65,15 @@ def parse_tag(t):
 
 def evaluate(iterable, options=None):
     if options is None:
-        options = parse_args([])    # use defaults
+        options = parse_args([])  # use defaults
 
     counts = EvalCounts()
-    num_features = None       # number of features per line
-    in_correct = False        # currently processed chunks is correct until now
-    last_correct = 'O'        # previous chunk tag in corpus
-    last_correct_type = ''    # type of previously identified chunk tag
-    last_guessed = 'O'        # previously identified chunk tag
-    last_guessed_type = ''    # type of previous chunk tag in corpus
+    num_features = None  # number of features per line
+    in_correct = False  # currently processed chunks is correct until now
+    last_correct = 'O'  # previous chunk tag in corpus
+    last_correct_type = ''  # type of previously identified chunk tag
+    last_guessed = 'O'  # previously identified chunk tag
+    last_guessed_type = ''  # type of previous chunk tag in corpus
 
     for line in iterable:
         line = line.rstrip('\r\n')
@@ -108,24 +110,28 @@ def evaluate(iterable, options=None):
         start_guessed = start_of_chunk(last_guessed, guessed,
                                        last_guessed_type, guessed_type)
 
+        # 只在 end chunk 的时候记录正确的 chunk 数
         if in_correct:
             if (end_correct and end_guessed and
-                last_guessed_type == last_correct_type):
+                    last_guessed_type == last_correct_type):
                 in_correct = False
                 counts.correct_chunk += 1
                 counts.t_correct_chunk[last_correct_type] += 1
-            elif (end_correct != end_guessed or guessed_type != correct_type):
+            elif end_correct != end_guessed or guessed_type != correct_type:
                 in_correct = False
 
         if start_correct and start_guessed and guessed_type == correct_type:
             in_correct = True
 
+        # 在 chunk 开头的时候记录全部的 chunk 数
         if start_correct:
             counts.found_correct += 1
             counts.t_found_correct[correct_type] += 1
         if start_guessed:
             counts.found_guessed += 1
             counts.t_found_guessed[guessed_type] += 1
+
+        # 记录单 tag 的正确数和总数
         if first_item != options.boundary:
             if correct == guessed and guessed_type == correct_type:
                 counts.correct_tags += 1
@@ -136,6 +142,7 @@ def evaluate(iterable, options=None):
         last_guessed_type = guessed_type
         last_correct_type = correct_type
 
+    # 记录最后一个 chunk 是否是正确的
     if in_correct:
         counts.correct_chunk += 1
         counts.t_correct_chunk[last_correct_type] += 1
@@ -143,16 +150,177 @@ def evaluate(iterable, options=None):
     return counts
 
 
+def evaluate_report_cases(iterable, out_dir, options=None):
+    if options is None:
+        options = parse_args([])  # use defaults
+
+    writers = {}
+    counts = EvalCounts()
+    num_features = None  # number of features per line
+    in_correct = False  # currently processed chunks is correct until now
+    last_correct = 'O'  # previous chunk tag in corpus
+    last_correct_type = ''  # type of previously identified chunk tag
+    last_guessed = 'O'  # previously identified chunk tag
+    last_guessed_type = ''  # type of previous chunk tag in corpus
+
+    sentence = [] # 记录当前句子的 token
+    correct_sentence_types = [] # 记录当前 correct 的 chunk 信息（start, end, type)
+    guessed_sentence_types = [] # 记录当前 guessed 的 chunk 信息（start, end, type)
+    pos_in_sentence = -1
+
+    for line in iterable:
+        line = line.rstrip('\r\n')
+
+        if options.delimiter == ANY_SPACE:
+            features = line.split()
+        else:
+            features = line.split(options.delimiter)
+
+        if num_features is None:
+            num_features = len(features)
+        elif num_features != len(features) and len(features) != 0:
+            raise FormatError('unexpected number of features: %d (%d)' %
+                              (len(features), num_features))
+
+        if len(features) == 0 or features[0] == options.boundary:
+            features = [options.boundary, 'O', 'O']
+        if len(features) < 3:
+            raise FormatError('unexpected number of features in line %s' % line)
+
+        guessed, guessed_type = parse_tag(features.pop())
+        correct, correct_type = parse_tag(features.pop())
+        first_item = features.pop(0)
+
+        if first_item == options.boundary:
+            guessed = 'O'
+
+        end_correct = end_of_chunk(last_correct, correct,
+                                   last_correct_type, correct_type)
+        end_guessed = end_of_chunk(last_guessed, guessed,
+                                   last_guessed_type, guessed_type)
+        start_correct = start_of_chunk(last_correct, correct,
+                                       last_correct_type, correct_type)
+        start_guessed = start_of_chunk(last_guessed, guessed,
+                                       last_guessed_type, guessed_type)
+
+        if first_item != options.boundary:
+            if type(first_item) is bytes:
+                sentence.append(first_item.decode())
+            else:
+                sentence.append(first_item)
+            pos_in_sentence += 1
+            # 当前开始新的 chunk
+            if start_correct and correct_type:
+                correct_sentence_types.append((pos_in_sentence, -1, correct_type))
+            if start_guessed and guessed_type:
+                guessed_sentence_types.append((pos_in_sentence, -1, guessed_type))
+            # 当前的 chunk 结束
+            if end_correct and last_correct_type and correct_sentence_types:
+                (start, _, _) = correct_sentence_types.pop()
+                correct_sentence_types.append((start, pos_in_sentence, last_correct_type))
+            if end_guessed and last_guessed_type and guessed_sentence_types:
+                (start, _, _) = guessed_sentence_types.pop()
+                guessed_sentence_types.append((start, pos_in_sentence, last_guessed_type))
+
+        else:
+            # 句子结束，记录当前句子的结果
+            true_positive = set(correct_sentence_types) & set(guessed_sentence_types)
+            false_positive = set(guessed_sentence_types) - set(correct_sentence_types)
+            false_negative = set(correct_sentence_types) - set(guessed_sentence_types)
+
+            write_record(writers, out_dir, "correct", true_positive, sentence)
+            write_record(writers, out_dir, "false_positive", false_positive, sentence)
+            write_record(writers, out_dir, "false_negative", false_negative, sentence)
+
+            # 句子结束时清空当前记录清空
+            sentence = []
+            correct_sentence_types = []
+            guessed_sentence_types = []
+            pos_in_sentence = -1
+
+        # 只在 end chunk 的时候记录正确的 chunk 数
+        if in_correct:
+            if end_correct and end_guessed and last_guessed_type == last_correct_type:
+                in_correct = False
+                counts.correct_chunk += 1
+                counts.t_correct_chunk[last_correct_type] += 1
+
+            elif end_correct != end_guessed or guessed_type != correct_type:
+                in_correct = False
+
+        if start_correct and start_guessed and guessed_type == correct_type:
+            in_correct = True
+
+        # 在 chunk 开头的时候记录全部的 chunk 数
+        if start_correct:
+            counts.found_correct += 1
+            counts.t_found_correct[correct_type] += 1
+        if start_guessed:
+            counts.found_guessed += 1
+            counts.t_found_guessed[guessed_type] += 1
+
+        # 记录单 tag 的正确数和总数
+        if first_item != options.boundary:
+            if correct == guessed and guessed_type == correct_type:
+                counts.correct_tags += 1
+            counts.token_counter += 1
+
+        last_guessed = guessed
+        last_correct = correct
+        last_guessed_type = guessed_type
+        last_correct_type = correct_type
+
+    # 记录最后一个 chunk 是否是正确的
+    if in_correct:
+        counts.correct_chunk += 1
+        counts.t_correct_chunk[last_correct_type] += 1
+
+    # 记录最后一个句子的信息
+    true_positive = set(correct_sentence_types) & set(guessed_sentence_types)
+    false_positive = set(guessed_sentence_types) - set(correct_sentence_types)
+    false_negative = set(correct_sentence_types) - set(guessed_sentence_types)
+
+    write_record(writers, out_dir, "correct", true_positive, sentence)
+    write_record(writers, out_dir, "false_positive", false_positive, sentence)
+    write_record(writers, out_dir, "false_negative", false_negative, sentence)
+
+    for w in writers.values():
+        w.close()
+    return counts
+
+
+def write_record(writers, out_dir, result_mode, sentence_types, sentence):
+    # 记录当前 sentence_types 中活跃的 writer 及其写入信息 (writer, already wrote position)
+    active_writes = {}
+
+    for (start, end, cur_type) in sentence_types:
+        if type(cur_type) is bytes:
+            cur_type = cur_type.decode()
+        key = cur_type + "_" + result_mode
+        if key not in writers.keys():
+            writers[key] = codecs.open(out_dir + "/" + key, 'w', 'utf-8')
+        if key not in active_writes.keys():
+            active_writes[key] = (writers[key], 0)
+        t_writer, position = active_writes[key]
+        if position < start:
+            t_writer.write("".join(sentence[position:start]))
+        t_writer.write("##" + "".join(sentence[start:end]) + "/" + cur_type + "##")
+        active_writes[key] = (writers[key], end)
+
+    # 把 sentence 中 chunk type 命中之后的部分记录
+    for (t_writer, position) in active_writes.values():
+        t_writer.write("".join(sentence[position:]) + "\n")
+
 
 def uniq(iterable):
-  seen = set()
-  return [i for i in iterable if not (i in seen or seen.add(i))]
+    seen = set()
+    return [i for i in iterable if not (i in seen or seen.add(i))]
 
 
 def calculate_metrics(correct, guessed, total):
-    tp, fp, fn = correct, guessed-correct, total-correct
-    p = 0 if tp + fp == 0 else 1.*tp / (tp + fp)
-    r = 0 if tp + fn == 0 else 1.*tp / (tp + fn)
+    tp, fp, fn = correct, guessed - correct, total - correct
+    p = 0 if tp + fp == 0 else 1. * tp / (tp + fp)
+    r = 0 if tp + fn == 0 else 1. * tp / (tp + fn)
     f = 0 if p + r == 0 else 2 * p * r / (p + r)
     return Metrics(tp, fp, fn, p, r, f)
 
@@ -184,16 +352,16 @@ def report(counts, out=None):
 
     if c.token_counter > 0:
         out.write('accuracy: %6.2f%%; ' %
-                  (100.*c.correct_tags/c.token_counter))
-        out.write('precision: %6.2f%%; ' % (100.*overall.prec))
-        out.write('recall: %6.2f%%; ' % (100.*overall.rec))
-        out.write('FB1: %6.2f\n' % (100.*overall.fscore))
+                  (100. * c.correct_tags / c.token_counter))
+        out.write('precision: %6.2f%%; ' % (100. * overall.prec))
+        out.write('recall: %6.2f%%; ' % (100. * overall.rec))
+        out.write('FB1: %6.2f\n' % (100. * overall.fscore))
 
     for i, m in sorted(by_type.items()):
         out.write('%17s: ' % i)
-        out.write('precision: %6.2f%%; ' % (100.*m.prec))
-        out.write('recall: %6.2f%%; ' % (100.*m.rec))
-        out.write('FB1: %6.2f  %d\n' % (100.*m.fscore, c.t_found_guessed[i]))
+        out.write('precision: %6.2f%%; ' % (100. * m.prec))
+        out.write('recall: %6.2f%%; ' % (100. * m.rec))
+        out.write('FB1: %6.2f  %d\n' % (100. * m.fscore, c.t_found_guessed[i]))
 
 
 def report_notprint(counts, out=None):
@@ -206,26 +374,26 @@ def report_notprint(counts, out=None):
     final_report = []
     line = []
     line.append('processed %d tokens with %d phrases; ' %
-              (c.token_counter, c.found_correct))
+                (c.token_counter, c.found_correct))
     line.append('found: %d phrases; correct: %d.\n' %
-              (c.found_guessed, c.correct_chunk))
+                (c.found_guessed, c.correct_chunk))
     final_report.append("".join(line))
 
     if c.token_counter > 0:
         line = []
         line.append('accuracy: %6.2f%%; ' %
-                  (100.*c.correct_tags/c.token_counter))
-        line.append('precision: %6.2f%%; ' % (100.*overall.prec))
-        line.append('recall: %6.2f%%; ' % (100.*overall.rec))
-        line.append('FB1: %6.2f\n' % (100.*overall.fscore))
+                    (100. * c.correct_tags / c.token_counter))
+        line.append('precision: %6.2f%%; ' % (100. * overall.prec))
+        line.append('recall: %6.2f%%; ' % (100. * overall.rec))
+        line.append('FB1: %6.2f\n' % (100. * overall.fscore))
         final_report.append("".join(line))
 
     for i, m in sorted(by_type.items()):
         line = []
         line.append('%17s: ' % i)
-        line.append('precision: %6.2f%%; ' % (100.*m.prec))
-        line.append('recall: %6.2f%%; ' % (100.*m.rec))
-        line.append('FB1: %6.2f  %d\n' % (100.*m.fscore, c.t_found_guessed[i]))
+        line.append('precision: %6.2f%%; ' % (100. * m.prec))
+        line.append('recall: %6.2f%%; ' % (100. * m.rec))
+        line.append('FB1: %6.2f  %d\n' % (100. * m.fscore, c.t_found_guessed[i]))
         final_report.append("".join(line))
     return final_report
 
@@ -286,7 +454,15 @@ def return_report(input_file):
     return report_notprint(counts)
 
 
+def record_cases(input_file, out_dir):
+    with codecs.open(input_file, "r", "utf8") as f:
+        counts = evaluate_report_cases(f, out_dir)
+    return report_notprint(counts)
+
+
 def main(argv):
+    record_cases("/Users/xuej/Documents/source/BERT-BiLSTM-CRF-NER/test.txt",
+                 "/Users/xuej/Documents/source/BERT-BiLSTM-CRF-NER")
     args = parse_args(argv[1:])
 
     if args.file is None:
@@ -295,6 +471,7 @@ def main(argv):
         with open(args.file) as f:
             counts = evaluate(f, args)
     report(counts)
+
 
 if __name__ == '__main__':
     sys.exit(main(sys.argv))
