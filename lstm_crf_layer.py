@@ -163,10 +163,12 @@ class BLSTM_CRF(object):
                 shape=[self.num_labels, self.num_labels],
                 initializer=self.initializers.xavier_initializer())
 
-            log_likelihood, trans = tf.contrib.crf.crf_log_likelihood(
-                inputs=logits,
-                tag_indices=self.labels,
-                transition_params=trans,
-                sequence_lengths=self.lengths)
-
-            return tf.reduce_mean(-log_likelihood), trans
+            if self.is_training:
+                log_likelihood, trans = tf.contrib.crf.crf_log_likelihood(
+                    inputs=logits,
+                    tag_indices=self.labels,
+                    transition_params=trans,
+                    sequence_lengths=self.lengths)
+                return tf.reduce_mean(-log_likelihood), trans
+            else:
+                return None, trans
