@@ -294,8 +294,8 @@ def input_fn_builder(input_file, seq_length, repeat, is_training, drop_remainder
     return input_fn
 
 
-def create_model(bert_config, with_bert, extra_embedding, is_training, input_ids, input_mask,
-                 segment_ids, labels, num_labels, sequence_lengths, use_one_hot_embeddings):
+def create_model(bert_config, with_bert, extra_embedding, is_training, is_prediction, input_ids,
+                 input_mask, segment_ids, labels, num_labels, sequence_lengths, use_one_hot_embeddings):
     if with_bert:
         model = modeling.BertModel(
             config=bert_config,
@@ -329,7 +329,8 @@ def create_model(bert_config, with_bert, extra_embedding, is_training, input_ids
                                          seq_length=max_seq_length,
                                          labels=labels,
                                          lengths=sequence_lengths,
-                                         is_training=is_training)
+                                         is_training=is_training,
+                                         is_prediction=is_prediction)
 
     rst = blstm_crf.add_blstm_crf_layer(crf_only=False)
     return rst
@@ -348,13 +349,15 @@ def model_fn_builder(bert_config, with_bert, extra_embedding, num_labels, init_c
             tf.logging.info("  name = %s, shape = %s" % (name, features[name].shape))
 
         is_training = (mode == tf.estimator.ModeKeys.TRAIN)
+        is_prediction = (mode == tf.estimator.ModeKeys.PREDICT)
 
         input_ids = features["input_ids"]
         input_mask = features["input_mask"]
         segment_ids = features["segment_ids"]
 
-        label_ids = None
-        if is_training:
+        if is_prediction:
+            label_ids = None
+        else:
             label_ids = features["label_ids"]
 
         used = tf.sign(tf.abs(input_ids))
@@ -366,6 +369,7 @@ def model_fn_builder(bert_config, with_bert, extra_embedding, num_labels, init_c
             with_bert=with_bert,
             extra_embedding=extra_embedding,
             is_training=is_training,
+            is_prediction=is_prediction,
             input_ids=input_ids,
             input_mask=input_mask,
             segment_ids=segment_ids,
@@ -429,12 +433,19 @@ def model_fn_builder(bert_config, with_bert, extra_embedding, num_labels, init_c
                 scaffold_fn=scaffold_fn)
 
         else:
-            predictions = {
-                "input_ids": input_ids,
-                "label_ids": label_ids,
-                "predict_ids": pred_ids,
-                "lengths": sequence_lengths,
-            }
+            if label_ids:
+                predictions = {
+                    "input_ids": input_ids,
+                    "label_ids": label_ids,
+                    "predict_ids": pred_ids,
+                    "lengths": sequence_lengths,
+                }
+            else:
+                predictions = {
+                    "input_ids": input_ids,
+                    "predict_ids": pred_ids,
+                    "lengths": sequence_lengths,
+                }
             output_spec = tf.contrib.tpu.TPUEstimatorSpec(
                 mode=mode, predictions=predictions, scaffold_fn=scaffold_fn)
         return output_spec

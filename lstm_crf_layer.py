@@ -12,7 +12,7 @@ from tensorflow.contrib import crf
 
 class BLSTM_CRF(object):
     def __init__(self, embedded_chars, hidden_unit, cell_type, num_layers, dropout_rate,
-                 initializers, num_labels, seq_length, labels, lengths, is_training):
+                 initializers, num_labels, seq_length, labels, lengths, is_training, is_prediction):
         """
         BLSTM-CRF 网络
         :param embedded_chars: Fine-tuning embedding input
@@ -26,6 +26,7 @@ class BLSTM_CRF(object):
         :param labels: 真实标签
         :param lengths: [batch_size] 每个batch下序列的真实长度
         :param is_training: 是否是训练过程
+        :param is_prediction: 是否是预测过程
         """
         self.hidden_unit = hidden_unit
         self.dropout_rate = dropout_rate
@@ -39,6 +40,7 @@ class BLSTM_CRF(object):
         self.lengths = lengths
         self.embedding_dims = embedded_chars.shape[-1].value
         self.is_training = is_training
+        self.is_prediction = is_prediction
 
     def add_blstm_crf_layer(self, crf_only):
         """
@@ -163,12 +165,12 @@ class BLSTM_CRF(object):
                 shape=[self.num_labels, self.num_labels],
                 initializer=self.initializers.xavier_initializer())
 
-            if self.is_training:
+            if self.is_prediction:
+                return None, trans
+            else:
                 log_likelihood, trans = tf.contrib.crf.crf_log_likelihood(
                     inputs=logits,
                     tag_indices=self.labels,
                     transition_params=trans,
                     sequence_lengths=self.lengths)
                 return tf.reduce_mean(-log_likelihood), trans
-            else:
-                return None, trans
