@@ -347,12 +347,16 @@ def model_fn_builder(bert_config, with_bert, extra_embedding, num_labels, init_c
         for name in sorted(features.keys()):
             tf.logging.info("  name = %s, shape = %s" % (name, features[name].shape))
 
+        is_training = (mode == tf.estimator.ModeKeys.TRAIN)
+
         input_ids = features["input_ids"]
         input_mask = features["input_mask"]
         segment_ids = features["segment_ids"]
-        label_ids = features["label_ids"]
 
-        is_training = (mode == tf.estimator.ModeKeys.TRAIN)
+        label_ids = None
+        if is_training:
+            label_ids = features["label_ids"]
+
         used = tf.sign(tf.abs(input_ids))
         length = tf.reduce_sum(used, reduction_indices=1)
         sequence_lengths = tf.cast(length, tf.int32)
